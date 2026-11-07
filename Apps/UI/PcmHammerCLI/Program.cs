@@ -42,6 +42,9 @@ namespace PcmHacking
             List<uint>? monitorCanIds = null;
             bool monitorCanAll = false;
             PcmType forcePcmType = PcmType.Undefined;
+#if LINUX_CLI
+            bool skipPowerOnWait = false;
+#endif
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -164,6 +167,11 @@ namespace PcmHacking
                     case "--debug":
                         debug = true;
                         break;
+#if LINUX_CLI
+                    case "--no-wait":
+                        skipPowerOnWait = true;
+                        break;
+#endif
                     case "--help":
                     case "/?":
                         PrintHelp();
@@ -251,6 +259,26 @@ namespace PcmHacking
                         logger.AddUserMessage("Auto-proceeding.");
                         return Task.FromResult(true);
                     };
+
+#if LINUX_CLI
+                    // The GUIs ask "Has the PCM been powered for at least 10 seconds?" before these
+                    // operations, and choosing a file there takes a few seconds anyway. A CLI run can
+                    // start within a second of the previous one, whose kernel exit rebooted the PCM.
+                    // An unlock that early gets 67 01 37 and the kernel upload is refused (7F 34 .. 33).
+                    if (!skipPowerOnWait && UploadsKernel(operation))
+                    {
+                        logger.AddUserMessage($"Waiting {PowerOnWaitSeconds} seconds for the PCM to be ready (--no-wait skips this if it has been powered on for a while).");
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(PowerOnWaitSeconds), cts.Token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            logger.AddUserMessage("Cancelled.");
+                            return 1;
+                        }
+                    }
+#endif
 
                     operationInProgress = true;
                     bool success = false;
@@ -907,6 +935,19 @@ namespace PcmHacking
         private const string AppName = "PCM Hammer CLI";
 #endif
 
+#if LINUX_CLI
+        // Matches the GUIs' power-on delay dialog.
+        private const int PowerOnWaitSeconds = 10;
+
+        // Operations that unlock the PCM and upload a kernel.
+        static bool UploadsKernel(string? operation) => operation switch
+        {
+            "read" or "read-range" or "test-read" or "verify" or
+            "write" or "write-calibration" or "test-write" => true,
+            _ => false
+        };
+#endif
+
         static void PrintHelp()
         {
             Console.WriteLine(AppName);
@@ -966,6 +1007,12 @@ namespace PcmHacking
             Console.WriteLine("                            Use when a PCM's OSID is not recognised. The wrong profile");
             Console.WriteLine("                            uploads the wrong kernel, so only use it deliberately.");
             Console.WriteLine();
+#if LINUX_CLI
+            Console.WriteLine("Timing:");
+            Console.WriteLine($"  --no-wait                 Skip the {PowerOnWaitSeconds} second wait before read, verify and write");
+            Console.WriteLine("                            operations. Only if the PCM has been powered on for a while.");
+            Console.WriteLine();
+#endif
             Console.WriteLine("Examples:");
 #if LINUX_CLI
             Console.WriteLine($"  {ExeName} --list-devices");
