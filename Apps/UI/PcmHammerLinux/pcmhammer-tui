@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# PcmHammer TUI: a whiptail menu around the PcmHammer Linux CLI.
+#
+# It only builds the command line, runs the CLI and shows its output; all PCM work is done
+# by the CLI itself. The full output (including --debug lines) is saved to a log for every
+# run. Pass/fail is judged from the output, because the CLI's exit code can't be trusted.
+
+set -u
+
+CONF="$HOME/.config/pcmhammer-tui.conf"
+
+# Defaults (overridden by the saved settings file).
+CLI="$HOME/pcmhammer-cli-listen"
+DEVICE=""
+DEVTYPE="xpro"
+KERNEL_DIR="$HOME/kernels"
+BIN_DIR="$HOME/PcmHammer"
+LOG_DIR="$HOME/pcmhammer-logs"
+FORCE="off"
+NO_WAIT="off"
+
+# shellcheck source=/dev/null
+[ -f "$CONF" ] && . "$CONF"
+
+LAST_LOG=""
+TITLE="PcmHammer (Linux)"
+H=20
+W=74
+
+# ---------------------------------------------------------------- helpers
+
+wt() { whiptail --title "$TITLE" "$@" 3>&1 1>&2 2>&3; }
+msg() { whiptail --title "$TITLE" --msgbox "$1" "${2:-12}" "$W"; }
+
+save_settings() {
+    mkdir -p "$(dirname "$CONF")"
+    {
+        for v in CLI DEVICE DEVTYPE KERNEL_DIR BIN_DIR LOG_DIR FORCE NO_WAIT; do
+            printf '%s=%q\n' "$v" "${!v}"
+        done
+    } > "$CONF"
+}
+
+detected_devices() {
+    local d
+    for d in /dev/ttyACM* /dev/ttyUSB*; do
+        [ -e "$d" ] && echo "$d"
+    done
+}
+
+# Use the saved device if it is present, otherwise the first one found.
+current_device() {
+    if [ -n "$DEVICE" ] && [ -e "$DEVICE" ]; then
+        echo "$DEVICE"
+    else
+        detected_devices | head -n 1
+    fi
+}
+
+device_status() {
+    local d
+    d=$(current_device)
+    if [ -n "$d" ]; then
+        echo "$d ($DEVTYPE)"
+    else
+        echo "NOT FOUND - is the adapter attached to this machine/VM?"
+    fi
+}
+
+check_ready() {
+    if [ ! -x "$CLI" ]; then
+        msg "PcmHammer CLI not found or not executable:\n\n$CLI\n\nSet it under Settings."
+        return 1
+    fi
+    if [ -z "$(current_device)" ]; then
+        msg "No serial adapter found (/dev/ttyACM* or /dev/ttyUSB*).\n\nPlug in the adapter. In a VM, make sure it is connected to the VM and not the host."
+        return 1
+    fi
+    if [ ! -d "$KERNEL_DIR" ]; then
+        msg "Kernel folder not found:\n\n$KERNEL_DIR\n\nSet it under Settings."
+        return 1
+    fi
+    return 0
+}
+
+# Pick a .bin file from BIN_DIR (or type a path). Sets PICKED.
+pick_file() {
+    local prompt=$1 files=() items=() f i sel
+    while IFS= read -r -d '' f; do
+        files+=("$f")
+    done < <(find "$BIN_DIR" -maxdepth 1 -type f -iname '*.bin' -print0 2>/dev/null | sort -z)
+
+    for i in "${!files[@]}"; do
+        items+=("$((i + 1))" "$(basename "${files[$i]}")  ($(( $(stat -c %s "${files[$i]}") / 1024 )) KiB)")
+    done
+    items+=("p" "Enter a path...")
+
+    sel=$(wt --menu "$prompt\n\nFolder: $BIN_DIR" "$H" "$W" 10 "${items[@]}") || return 1
+    if [ "$sel" = "p" ]; then
+        f=$(wt --inputbox "Path to the .bin file:" 10 "$W" "$BIN_DIR/") || return 1
+        f="${f/#\~/$HOME}"
+        if [ ! -f "$f" ]; then
+            msg "File not found:\n\n$f"
+            return 1
+        fi
+        PICKED="$f"
+    else
+        PICKED="${files[$((sel - 1))]}"
+    fi
+}
+
+# OS ID at 0x504 (valid for P01/P59-style 512 KiB / 1 MiB images; informational only).
+file_osid() {
+    local hex
+    hex=$(od -An -tx1 -j 1284 -N4 "$1" 2>/dev/null | tr -d ' \n')
+    [ ${#hex} -eq 8 ] && echo $((16#$hex))
+}
+
+# ---------------------------------------------------------------- running the CLI
+
+# run_cli <operation-label> <cli args...>
+run_cli() {
+    local label=$1
+    shift
+    check_ready || return 1
+
+    local dev args status
+    dev=$(current_device)
+    args=("$@" --device "$dev:$DEVTYPE" --kernel-dir "$KERNEL_DIR" --debug)
+    [ "$NO_WAIT" = "on" ] && args+=(--no-wait)
+
+    mkdir -p "$LOG_DIR"
+    LAST_LOG="$LOG_DIR/$(date +%Y%m%d-%H%M%S)-$label.log"
+    { printf '# command:'; printf ' %q' "$CLI" "${args[@]}"; echo; } > "$LAST_LOG"
+
+    clear
+    echo "=== PcmHammer: $label"
+    echo "=== Log: $LAST_LOG"
+    echo "=== Ctrl+C once cancels safely. Do not unplug or power off during a write."
+    echo
+
+    # Ctrl+C must reach the CLI (it shuts down cleanly), but must not kill this script or
+    # the tee/grep that carry its output, so they ignore it and the script just waits.
+    trap ':' INT
+    "$CLI" "${args[@]}" 2>&1 | (trap '' INT; tee -a "$LAST_LOG" | grep --line-buffered -v '^\[DEBUG\]')
+    status=${PIPESTATUS[0]}
+    trap - INT
+    echo "# exit code: $status" >> "$LAST_LOG"
+}
+
+# Lines from the last log that the user would see (no debug lines).
+user_lines() { grep -v '^\[DEBUG\]' "$LAST_LOG" | grep -v '^# '; }
+
+show_result() {
+    local ok=$1 summary=$2
+    echo
+    echo "------------------------------------------------------------------"
+    if [ "$ok" = "yes" ]; then
+        printf '\033[1;32mPASSED\033[0m  %s\n' "$summary"
+    else
+        printf '\033[1;31mFAILED / CHECK OUTPUT\033[0m  %s\n' "$summary"
+        local problems
+        problems=$(user_lines | grep -iE 'error|fail|abort|denied|not respond|refused|unusable|corrupt' | tail -n 8)
+        [ -n "$problems" ] && { echo; echo "Lines worth a look:"; echo "$problems"; }
+    fi
+    echo "Log: $LAST_LOG"
+    echo "------------------------------------------------------------------"
+    read -r -p "Press Enter to return to the menu..." _
+}
+
+# ---------------------------------------------------------------- operations
+
+op_read() {
+    local out
+    out=$(wt --inputbox "Save the read to:" 10 "$W" "$BIN_DIR/read-$(date +%Y%m%d-%H%M).bin") || return
+    out="${out/#\~/$HOME}"
+    # The CLI only saves .bin or .phz, and refuses after the whole read if the name has
+    # neither, so add .bin up front.
+    shopt -s nocasematch
+    [[ "$out" == *.bin || "$out" == *.phz ]] || out="$out.bin"
+    shopt -u nocasematch
+    if [ -e "$out" ]; then
+        wt --defaultno --yesno "$out already exists.\n\nOverwrite it?" 10 "$W" || return
+    fi
+    run_cli read --read "$out" || return
+
+    if user_lines | grep -q '^Read complete' && [ -s "$out" ]; then
+        local hash match="" f
+        hash=$(sha256sum "$out" | cut -d' ' -f1)
+        while IFS= read -r -d '' f; do
+            [ "$f" -ef "$out" ] && continue
+            [ "$(stat -c %s "$f")" = "$(stat -c %s "$out")" ] || continue
+            [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$hash" ] && match+="  identical to: $(basename "$f")"$'\n'
+        done < <(find "$BIN_DIR" -maxdepth 1 -type f -iname '*.bin' -print0 2>/dev/null)
+        echo
+        echo "Saved:   $out"
+        echo "SHA-256: $hash"
+        [ -n "$match" ] && printf '%s' "$match"
+        show_result yes "Read complete."
+    elif user_lines | grep -q 'Unable to save file'; then
+        show_result no "The PCM was read, but the file could not be saved (see the output above)."
+    else
+        show_result no "The read did not complete."
+    fi
+}
+
+op_verify() {
+    pick_file "File to compare against the PCM (nothing is changed):" || return
+    run_cli verify --verify "$PICKED" || return
+    if user_lines | grep -q 'All relevant ranges are identical'; then
+        show_result yes "PCM matches $(basename "$PICKED")."
+    elif user_lines | grep -qE ' (Same|Different) '; then
+        echo
+        echo "Ranges that differ:"
+        user_lines | grep ' Different '
+        show_result no "PCM does not fully match $(basename "$PICKED") (see the ranges above)."
+    else
+        show_result no "The compare did not complete."
+    fi
+}
+
+op_test_write() {
+    pick_file "File for a test write (nothing is erased or written):" || return
+    run_cli test-write --test-write "$PICKED" || return
+    if user_lines | grep -q 'Test write complete'; then
+        show_result yes "Test write complete. The PCM was not changed."
+    else
+        show_result no "The test write did not complete."
+    fi
+}
+
+confirm_write() {
+    local kind=$1 file=$2 extra=$3 osid force_note=""
+    osid=$(file_osid "$file")
+    [ "$FORCE" = "on" ] && force_note="\nFORCE is ON: every block in scope is erased and rewritten, even if it already matches.\n"
+    wt --defaultno --yesno "$kind\n\nFile: $(basename "$file")\nFile OS ID (P01/P59 layout): ${osid:-unknown}\n$force_note\n$extra\nRun a test write first if you have not.\n\nContinue?" "$H" "$W"
+}
+
+op_write_cal() {
+    pick_file "File to take the CALIBRATION from:" || return
+    confirm_write "WRITE CALIBRATION" "$PICKED" \
+        "Only the calibration is written. The PCM must already run the same OS as the file (the CLI checks this). Don't remove power during the write." || return
+    local args=(--write-calibration "$PICKED")
+    [ "$FORCE" = "on" ] && args+=(--force)
+    run_cli write-calibration "${args[@]}" || return
+    finish_write
+}
+
+op_write_full() {
+    pick_file "File to write to the WHOLE PCM:" || return
+    confirm_write "FULL WRITE (OS + calibration + parameters + boot where allowed)" "$PICKED" \
+        "This can change the operating system and VIN/parameter data. On a P01 it rewrites the boot block if it differs: a failure during that block needs bench recovery." || return
+    local typed
+    typed=$(wt --inputbox "Type WRITE to start the full write:" 10 "$W") || return
+    if [ "$typed" != "WRITE" ]; then
+        msg "Cancelled. Nothing was written." 8
+        return
+    fi
+    local args=(--write "$PICKED")
+    [ "$FORCE" = "on" ] && args+=(--force)
+    run_cli write "${args[@]}" || return
+    finish_write
+}
+
+finish_write() {
+    if user_lines | grep -q 'Flash successful!'; then
+        show_result yes "Flash successful. All written ranges match the file."
+    elif user_lines | grep -q 'All relevant ranges are identical' && ! user_lines | grep -q 'Erasing'; then
+        show_result yes "PCM already matched the file; nothing needed writing."
+    else
+        show_result no "The write did not report success. Do NOT power off; read the output and log first."
+    fi
+}
+
+op_identify() {
+    run_cli identify-pcm --identify-pcm || return
+    if user_lines | grep -q 'No PCM detected'; then
+        show_result no "No PCM detected."
+    else
+        show_result yes "Identification finished (details above)."
+    fi
+}
+
+op_view_log() {
+    if [ -z "$LAST_LOG" ]; then
+        LAST_LOG=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n 1)
+    fi
+    if [ -z "$LAST_LOG" ] || [ ! -f "$LAST_LOG" ]; then
+        msg "No logs yet." 8
+        return
+    fi
+    less -R "$LAST_LOG"
+}
+
+# ---------------------------------------------------------------- settings
+
+op_settings() {
+    local sel v
+    while true; do
+        sel=$(wt --menu "Settings (saved to $CONF)" "$H" "$W" 9 \
+            1 "Adapter port:   $(current_device)" \
+            2 "Adapter type:   $DEVTYPE" \
+            3 "CLI program:    $CLI" \
+            4 "Kernel folder:  $KERNEL_DIR" \
+            5 "Bin folder:     $BIN_DIR" \
+            6 "Log folder:     $LOG_DIR" \
+            7 "Force writes:   $FORCE" \
+            8 "Skip 10 s wait: $NO_WAIT" \
+            b "Back") || return
+        case $sel in
+            1)
+                local items=() d
+                while IFS= read -r d; do items+=("$d" ""); done < <(detected_devices)
+                if [ ${#items[@]} -eq 0 ]; then msg "No adapters found." 8; continue; fi
+                v=$(wt --menu "Adapter port:" "$H" "$W" 8 "${items[@]}") && DEVICE=$v ;;
+            2)
+                v=$(wt --menu "Adapter type:" "$H" "$W" 5 \
+                    xpro "OBDX Pro" avt "AVT" elm "ELM327 / OBDLink" slcan "SLCAN") && DEVTYPE=$v ;;
+            3) v=$(wt --inputbox "CLI program:" 10 "$W" "$CLI") && CLI=${v/#\~/$HOME} ;;
+            4) v=$(wt --inputbox "Kernel folder:" 10 "$W" "$KERNEL_DIR") && KERNEL_DIR=${v/#\~/$HOME} ;;
+            5) v=$(wt --inputbox "Folder with .bin files:" 10 "$W" "$BIN_DIR") && BIN_DIR=${v/#\~/$HOME} ;;
+            6) v=$(wt --inputbox "Log folder:" 10 "$W" "$LOG_DIR") && LOG_DIR=${v/#\~/$HOME} ;;
+            7) if [ "$FORCE" = "on" ]; then FORCE=off; else
+                   wt --defaultno --yesno "Force makes writes erase and rewrite every block in scope, even blocks that already match (on a P01 full write that includes the boot block).\n\nTurn force ON?" 12 "$W" && FORCE=on
+               fi ;;
+            8) if [ "$NO_WAIT" = "on" ]; then NO_WAIT=off; else NO_WAIT=on; fi ;;
+            b) return ;;
+        esac
+        save_settings
+    done
+}
+
+# ---------------------------------------------------------------- main menu
+
+main() {
+    if ! command -v whiptail > /dev/null; then
+        echo "whiptail is required: sudo apt install whiptail" >&2
+        exit 1
+    fi
+    local sel
+    while true; do
+        sel=$(wt --menu "Adapter: $(device_status)\nForce: $FORCE   Skip 10 s wait: $NO_WAIT" "$H" "$W" 9 \
+            1 "Read PCM to a file" \
+            2 "Verify: compare a file with the PCM" \
+            3 "Test write (no changes)" \
+            4 "Write calibration" \
+            5 "Full write (can change OS / boot)" \
+            6 "Identify PCM" \
+            7 "View last log" \
+            8 "Settings" \
+            q "Quit") || break
+        case $sel in
+            1) op_read ;;
+            2) op_verify ;;
+            3) op_test_write ;;
+            4) op_write_cal ;;
+            5) op_write_full ;;
+            6) op_identify ;;
+            7) op_view_log ;;
+            8) op_settings ;;
+            q) break ;;
+        esac
+    done
+    clear
+}
+
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"
