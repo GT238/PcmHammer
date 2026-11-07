@@ -134,7 +134,7 @@ namespace PcmHacking
 
                     Message response = await this.vehicle.ReceiveMessage();
 
-                    // EXPERIMENT: as the loop before d201a9a7 did (and Windows 2.00 Preview still does),
+                    // As the loop before d201a9a7 did (and Windows 2.00 Preview still does),
                     // keep listening after a timeout before sending the query again. The reply is often
                     // just late: a P59 64 KiB CRC takes about 1.02 s against a 1 s receive timeout, and
                     // re-sending while the kernel is busy can hang it.
