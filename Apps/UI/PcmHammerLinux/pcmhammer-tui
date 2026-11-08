@@ -10,10 +10,12 @@ set -u
 CONF="$HOME/.config/pcmhammer-tui.conf"
 
 # Defaults (overridden by the saved settings file).
-CLI="$HOME/pcmhammer-cli-listen"
+CLI="$HOME/pcmhammer-cli"
 DEVICE=""
 DEVTYPE="xpro"
-KERNEL_DIR="$HOME/kernels"
+# Empty: use the kernels built into the CLI. A folder set here overrides them (a loose
+# kernel file takes precedence over the embedded copy), so leave it empty normally.
+KERNEL_DIR=""
 BIN_DIR="$HOME/PcmHammer"
 LOG_DIR="$HOME/pcmhammer-logs"
 FORCE="off"
@@ -76,7 +78,7 @@ check_ready() {
         msg "No serial adapter found (/dev/ttyACM* or /dev/ttyUSB*).\n\nPlug in the adapter. In a VM, make sure it is connected to the VM and not the host."
         return 1
     fi
-    if [ ! -d "$KERNEL_DIR" ]; then
+    if [ -n "$KERNEL_DIR" ] && [ ! -d "$KERNEL_DIR" ]; then
         msg "Kernel folder not found:\n\n$KERNEL_DIR\n\nSet it under Settings."
         return 1
     fi
@@ -126,7 +128,8 @@ run_cli() {
 
     local dev args status
     dev=$(current_device)
-    args=("$@" --device "$dev:$DEVTYPE" --kernel-dir "$KERNEL_DIR" --debug)
+    args=("$@" --device "$dev:$DEVTYPE" --debug)
+    [ -n "$KERNEL_DIR" ] && args+=(--kernel-dir "$KERNEL_DIR")
     [ "$NO_WAIT" = "on" ] && args+=(--no-wait)
 
     mkdir -p "$LOG_DIR"
@@ -301,7 +304,7 @@ op_settings() {
             1 "Adapter port:   $(current_device)" \
             2 "Adapter type:   $DEVTYPE" \
             3 "CLI program:    $CLI" \
-            4 "Kernel folder:  $KERNEL_DIR" \
+            4 "Kernel folder:  ${KERNEL_DIR:-(built in)}" \
             5 "Bin folder:     $BIN_DIR" \
             6 "Log folder:     $LOG_DIR" \
             7 "Force writes:   $FORCE" \
@@ -317,7 +320,7 @@ op_settings() {
                 v=$(wt --menu "Adapter type:" "$H" "$W" 5 \
                     xpro "OBDX Pro" avt "AVT" elm "ELM327 / OBDLink" slcan "SLCAN") && DEVTYPE=$v ;;
             3) v=$(wt --inputbox "CLI program:" 10 "$W" "$CLI") && CLI=${v/#\~/$HOME} ;;
-            4) v=$(wt --inputbox "Kernel folder:" 10 "$W" "$KERNEL_DIR") && KERNEL_DIR=${v/#\~/$HOME} ;;
+            4) v=$(wt --inputbox "Kernel folder override (leave empty to use the kernels built into the CLI):" 10 "$W" "$KERNEL_DIR") && KERNEL_DIR=${v/#\~/$HOME} ;;
             5) v=$(wt --inputbox "Folder with .bin files:" 10 "$W" "$BIN_DIR") && BIN_DIR=${v/#\~/$HOME} ;;
             6) v=$(wt --inputbox "Log folder:" 10 "$W" "$LOG_DIR") && LOG_DIR=${v/#\~/$HOME} ;;
             7) if [ "$FORCE" = "on" ]; then FORCE=off; else
