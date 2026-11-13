@@ -55,13 +55,20 @@ Branch: **`logger`** on Gene's fork **GT238/PcmHammer**. Last feature commit on 
 ---
 
 ## What's built (the logger: `Apps/UI/Avalonia/PCMLoggerAvalonia`)
-Standalone MVVM Avalonia app with a **WinForms-style tab bar**: **Configuration**, **Grid**,
-**Dashboard**, **Monitors**, **Trouble Codes** (the `TabControl` replaced the old toolbar
-view-switch buttons as of commit `2b6eb5c`). The **Configuration** tab mirrors WinForms: Devices
-(Select OBD2 Device + summary), Paths (Set/Open Log Folder, default Documents — recording writes
-there), View (show/hide Grid/Dashboard/Monitors + Theme System/Light/Dark), Options (Auto start
-logging). WinForms items without a backend yet (Zoom, Auxiliary bus, Profiles, Parameters/Debug
-tabs) are intentionally omitted, not shown as dead controls.
+Standalone MVVM Avalonia app with a **WinForms-style tab bar**: **Configuration**, **Parameters**,
+**Dashboard**, **Monitors**, **Trouble Codes**, plus an **always-visible live-value pane on the
+right** (the WinForms right panel; toggled by the Configuration "PIDs" checkbox). The `TabControl`
+replaced the old toolbar view-switch buttons (`2b6eb5c`).
+- **Configuration** mirrors WinForms: Devices (Select OBD2 Device + summary), Paths (Set/Open Log
+  Folder, default Documents — recording writes there), View (PIDs pane + show/hide Dashboard/Monitors
+  + Theme System/Light/Dark), Options (Auto start logging).
+- **Parameters** (`b686d2d`): lists every PID the PCM supports with Enable/Zoom/Name/Units + a search
+  box. The enabled rows are the source of truth — they build the shared `LogColumn`s and drive the
+  right pane, so PIDs are picked in-app. Open Profile just enables the matching rows.
+- **Connect button toggles to Disconnect** when connected (`cbbb3d6`); Disconnect stops logging and
+  releases the device.
+- WinForms items still without a backend (Auxiliary bus, Profiles checkbox, a Debug tab) are omitted
+  rather than shown as dead controls.
 
 Shared backend (in **PcmLibrary**, per Antus):
 - `Logging/LoggingController.cs` — framework-agnostic polling loop; events (RowAvailable, Started,
