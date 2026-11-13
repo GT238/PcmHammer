@@ -55,7 +55,13 @@ Branch: **`logger`** on Gene's fork **GT238/PcmHammer**. Last feature commit on 
 ---
 
 ## What's built (the logger: `Apps/UI/Avalonia/PCMLoggerAvalonia`)
-Standalone MVVM Avalonia app. Four views: **Grid**, **Dashboard**, **Monitor**, **Trouble Codes**.
+Standalone MVVM Avalonia app with a **WinForms-style tab bar**: **Configuration**, **Grid**,
+**Dashboard**, **Monitors**, **Trouble Codes** (the `TabControl` replaced the old toolbar
+view-switch buttons as of commit `2b6eb5c`). The **Configuration** tab mirrors WinForms: Devices
+(Select OBD2 Device + summary), Paths (Set/Open Log Folder, default Documents — recording writes
+there), View (show/hide Grid/Dashboard/Monitors + Theme System/Light/Dark), Options (Auto start
+logging). WinForms items without a backend yet (Zoom, Auxiliary bus, Profiles, Parameters/Debug
+tabs) are intentionally omitted, not shown as dead controls.
 
 Shared backend (in **PcmLibrary**, per Antus):
 - `Logging/LoggingController.cs` — framework-agnostic polling loop; events (RowAvailable, Started,
