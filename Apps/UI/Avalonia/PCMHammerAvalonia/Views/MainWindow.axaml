@@ -13,6 +13,12 @@
             <Setter Property="IsHitTestVisible" Value="False"/>
             <Setter Property="Focusable" Value="False"/>
         </Style>
+        <!-- Make room for the app icon we draw at the far left of the custom title bar: indent the
+             chrome's title text so "PCM Hammer" starts to the right of the icon instead of under it.
+             The caption buttons use vector glyphs, so the title is the only TextBlock in the template. -->
+        <Style Selector="WindowDrawnDecorations /template/ TextBlock">
+            <Setter Property="Margin" Value="32,0,0,0"/>
+        </Style>
     </Window.Styles>
 
     <Design.DataContext>
