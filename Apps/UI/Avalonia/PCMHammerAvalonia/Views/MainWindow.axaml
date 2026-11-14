@@ -19,6 +19,17 @@
         <vm:MainViewModel />
     </Design.DataContext>
 
+    <Panel>
+    <!-- App icon for the custom-drawn title bar. The extended client-area chrome (Windows) replaces
+         the native title bar, so the OS no longer paints the Window.Icon; this draws it in the empty
+         left of the title strip. Shown only on Windows (set in ApplyWindowsOnlyChrome) - on Linux the
+         native title bar already shows the Window.Icon, so an overlay here would just duplicate it
+         over the menu. IsHitTestVisible=False so the title bar still drags. -->
+    <Image x:Name="TitleBarIcon" Source="/Assets/titlebar_icon.png"
+           Width="18" Height="18"
+           HorizontalAlignment="Left" VerticalAlignment="Top"
+           Margin="8,6,0,0" IsHitTestVisible="False" IsVisible="False"/>
+
     <Grid x:Name="RootGrid" RowDefinitions="auto,*,auto">
         <!-- Main Navigation Menu -->
         <Border Background="Transparent"
@@ -233,4 +244,5 @@
             </Grid>
         </Border>
     </Grid>
+    </Panel>
 </Window>

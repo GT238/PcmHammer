@@ -43,6 +43,9 @@ public partial class MainWindow : Window
         ExtendClientAreaToDecorationsHint = true;
         ExtendClientAreaTitleBarHeightHint = 30;
         RootGrid.Margin = new Thickness(0, 30, 0, 0);
+
+        // The extended chrome hides the native title-bar icon, so show our own in the title strip.
+        TitleBarIcon.IsVisible = true;
     }
 
     private async void Window_Closing(object? sender, WindowClosingEventArgs e)
